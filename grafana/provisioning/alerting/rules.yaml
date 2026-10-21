@@ -1,0 +1,131 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: fraud-scoring
+    folder: Fraud Detection
+    interval: 10s
+    rules:
+      - uid: fraud-ratio-high
+        title: Доля фрода выше 3%
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: Доля транзакций с fraud_flag = 1 среди последних 1000 выше 3%
+          description: "Сейчас {{ humanizePercentage $values.B.Value }}. Обычный уровень около 0.5%: проверьте новую модель и входной поток"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 60, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max(fraud_detector_fraud_ratio)
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model: {refId: B, type: reduce, expression: A, reducer: last}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0.03]}
+
+      - uid: scoring-stream-stopped
+        title: Поток скоринга остановился
+        condition: C
+        for: 30s
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: Сервис скоринга обрабатывает меньше 0.5 транзакции в секунду
+          description: "Скорость {{ printf \"%.2f\" $values.B.Value }} tx/s. Проверьте transaction_simulator, Kafka и fraud_detector"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 60, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(rate(fraud_detector_transactions_total[30s]))
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model: {refId: B, type: reduce, expression: A, reducer: last}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: lt, params: [0.5]}
+
+      - uid: processing-latency-high
+        title: p95 обработки транзакции выше 250 мс
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 95-й перцентиль времени обработки одной транзакции выше 250 мс
+          description: "Сейчас {{ printf \"%.4f\" $values.B.Value }} с"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 60, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: histogram_quantile(0.95, sum(rate(fraud_detector_processing_seconds_bucket[1m])) by (le))
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model: {refId: B, type: reduce, expression: A, reducer: last}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0.25]}
+
+      - uid: consumer-lag-high
+        title: Скоринг отстаёт от потока
+        condition: C
+        for: 30s
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: В transactions больше 500 непрочитанных сообщений
+          description: "Отставание {{ printf \"%.0f\" $values.B.Value }} сообщений"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 60, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max(fraud_detector_consumer_lag)
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model: {refId: B, type: reduce, expression: A, reducer: last}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [500]}
